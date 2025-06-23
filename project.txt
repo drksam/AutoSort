@@ -1,0 +1,12 @@
+
+An app that will run on windows 
+that monitors a directory for new scans (PDF)
+then compares the new scan to the files in a set of directories 
+decides the correct directory 
+renames the file "DIR_DATE_TIME" using the chosen directory as DIR and current date and time
+then moves the file to that directory 
+we do not need a formal ui we can set up locations with a config file 
+
+
+there is a buildlog.md log all progress, errors corrected, lessons learned and anything info that will help as we move allong
+there is a readme.md please include instructions for other users.

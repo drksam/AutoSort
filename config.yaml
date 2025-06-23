@@ -1,0 +1,17 @@
+# AutoSort Configuration
+
+# Directory to monitor for new PDF scans
+watch_directory: C:/test
+
+# List of directories to compare and move files into
+# Example:
+directories:
+  - S:/Amazon
+  - S:/DocNotes
+  - S:/Holston
+  - S:/Invoice
+  - S:/MISC
+  - S:/WorkOrders
+
+# Logging file
+log_file: buildlog.md
