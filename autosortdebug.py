@@ -1,0 +1,323 @@
+import os
+import time
+import shutil
+import glob
+import yaml
+from datetime import datetime
+import PyPDF2
+from difflib import SequenceMatcher, get_close_matches
+import sys
+import json
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+from tkinter import ttk
+
+# Load configuration
+def load_config(path='config.yaml'):
+    with open(path, 'r') as f:
+        return yaml.safe_load(f)
+
+def log(message, log_file):
+    with open(log_file, 'a') as f:
+        f.write(f"{datetime.now()} - {message}\n")
+
+def extract_pdf_text(pdf_path):
+    try:
+        with open(pdf_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            text = ''
+            for page in reader.pages:
+                text += page.extract_text() or ''
+            print(f"[EXTRACT] {pdf_path} | Length: {len(text)}")
+            return text
+    except Exception as e:
+        print(f"[ERROR] Failed to extract text from {pdf_path}: {e}")
+        return ''
+
+def directory_name_in_text(text, directories, parent_dir=None):
+    text_lower = text.lower()
+    dir_names = [os.path.basename(d).lower() for d in directories if not (parent_dir and os.path.basename(parent_dir).lower() == os.path.basename(d).lower())]
+    # Fuzzy match: look for close matches in the text
+    found = []
+    for dir_name in dir_names:
+        matches = get_close_matches(dir_name, text_lower.split(), n=1, cutoff=0.7)
+        if matches:
+            found.append(dir_name)
+    if found:
+        # Return the first matching directory
+        for d in directories:
+            if os.path.basename(d).lower() == found[0]:
+                return d
+    # Fallback: substring search
+    for d in directories:
+        dir_name = os.path.basename(d).lower()
+        if parent_dir and os.path.basename(parent_dir).lower() == dir_name:
+            continue
+        if dir_name in text_lower:
+            return d
+    return None
+
+def ensure_unknown_dir_exists(directories):
+    unknown_dir = None
+    for d in directories:
+        if os.path.basename(d).lower() == 'unknown':
+            unknown_dir = d
+            break
+    if not unknown_dir:
+        unknown_dir = os.path.join(os.path.dirname(directories[0]), 'unknown')
+        os.makedirs(unknown_dir, exist_ok=True)
+        directories.append(unknown_dir)
+    return unknown_dir
+
+def build_index(directories, index_dir=None):
+    """Build index from saved files or scan directories if no index exists"""
+    if index_dir and os.path.exists(index_dir):
+        # Try to load from saved index files first
+        index = load_index_from_files(index_dir, directories)
+        # Check if we have any data
+        has_data = any(len(files) > 0 for files in index.values())
+        if has_data:
+            print(f"[INDEX] Loaded existing index from {index_dir}")
+            return index
+        else:
+            print(f"[INDEX] No existing index found, building new index...")
+    
+    # Build index from scratch by scanning directories
+    index = {}
+    for d in directories:
+        if os.path.basename(d).lower() == 'unknown':
+            continue  # Skip unknown directory
+        pdfs = glob.glob(os.path.join(d, '*.pdf'))
+        index[d] = []
+        for pdf in pdfs:
+            full_text = extract_pdf_text(pdf)
+            index[d].append({'file': pdf, 'full_text': full_text})
+    return index
+
+def pause_for_debug():
+    input("Press Enter to continue...")
+
+# Compare PDF files (placeholder for actual comparison logic)
+def compare_pdfs(new_pdf, directories, parent_dir=None, index_dir=None):
+    print_step("Step 1: Extracting full text of first page", os.path.basename(new_pdf))
+    full_text = extract_pdf_text(new_pdf)
+    print("\n[DEBUG] Full text of first page:\n" + full_text + f"\n[DEBUG] Length: {len(full_text)}\n")
+    pause_for_debug()
+    print_step("Step 2: Checking for directory name in text (fuzzy)", os.path.basename(new_pdf))
+    dir_found = directory_name_in_text(full_text, directories, parent_dir)
+    if dir_found:
+        print_step("Directory name found in text, selecting directory", os.path.basename(new_pdf), dir_found)
+        return dir_found
+    print_step("Step 3: Building index for directories", os.path.basename(new_pdf))
+    index = build_index(directories, index_dir)
+    print_step("Step 4: Comparing full text to index", os.path.basename(new_pdf))
+    best_dir = None
+    best_score = 0.0
+    for d, files in index.items():
+        for entry in files:
+            score = SequenceMatcher(None, full_text, entry['full_text']).ratio()
+            print(f"[COMPARE] Index: {entry['file']} | Score: {score:.3f} | Length: {len(entry['full_text'])}")
+            if score > best_score:
+                best_score = score
+                best_dir = d
+    if best_score > 0.8:
+        print_step("Full file match found in index", os.path.basename(new_pdf), best_dir)
+        return best_dir
+    # Fallback: Full search of all files in directories
+    print_step("Step 5: Fallback full search of all files in directories", os.path.basename(new_pdf))
+    best_dir = None
+    best_score = 0.0
+    for d in directories:
+        if os.path.basename(d).lower() == 'unknown':
+            continue
+        print_step(f"Searching folder: {d}", os.path.basename(new_pdf))
+        pdfs = glob.glob(os.path.join(d, '*.pdf'))
+        for pdf in pdfs:
+            print_step(f"Comparing file: {pdf}", os.path.basename(new_pdf))
+            existing_text = extract_pdf_text(pdf)  # Extract all pages
+            score = SequenceMatcher(None, full_text, existing_text).ratio()
+            print(f"[COMPARE] Fallback: {pdf} | Score: {score:.3f} | Length: {len(existing_text)}")
+            if score > best_score:
+                best_score = score
+                best_dir = d
+    if best_score > 0.8:
+        print_step("Full file match found in fallback search", os.path.basename(new_pdf), best_dir)
+        return best_dir
+    
+    # Step 6: Manual folder selection GUI
+    print_step("Step 6: Opening manual folder selection GUI", os.path.basename(new_pdf))
+    selected_folder = show_folder_selection_gui(new_pdf, directories)
+    if selected_folder and selected_folder != "unknown":
+        return selected_folder
+    
+    print_step("Step 7: Moving to unknown folder", os.path.basename(new_pdf))
+    unknown_dir = ensure_unknown_dir_exists(directories)
+    return unknown_dir
+
+def update_index_for_file(directory, filename, full_text, index_dir):
+    index_file = os.path.join(index_dir, f'{os.path.basename(directory)}_index.json')
+    entry = {'file': filename, 'full_text': full_text}
+    # Load existing index or create new
+    if os.path.exists(index_file):
+        with open(index_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    else:
+        data = []
+    # Avoid duplicates
+    data = [e for e in data if e['file'] != filename]
+    data.append(entry)
+    with open(index_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def rename_and_move(file_path, target_dir, log_file, index_dir=None):
+    base_dir = os.path.basename(target_dir)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    new_name = f"{base_dir}_{timestamp}.pdf"
+    new_path = os.path.join(target_dir, new_name)
+    shutil.move(file_path, new_path)
+    log(f"Moved and renamed {file_path} to {new_path}", log_file)
+    # Update index if index_dir is provided
+    if index_dir:
+        full_text = extract_pdf_text(new_path)
+        update_index_for_file(target_dir, new_name, full_text, index_dir)
+
+def print_progress(current, total, filename):
+    bar_length = 40
+    filled_length = int(bar_length * current // total) if total else 0
+    bar = '█' * filled_length + '-' * (bar_length - filled_length)
+    print(f'Processing: |{bar}| {current}/{total} files - {filename}', end='\r', flush=True)
+
+def print_step(step, filename=None, directory=None):
+    msg = f"[STEP] {step}"
+    if filename:
+        msg += f" | File: {filename}"
+    if directory:
+        msg += f" | Directory: {directory}"
+    print(msg, flush=True)
+
+def get_directories_and_index(parent_dir):
+    dirs = [os.path.join(parent_dir, d) for d in os.listdir(parent_dir)
+            if os.path.isdir(os.path.join(parent_dir, d)) and d.lower() != 'unknown']
+    print("Directories found for indexing:")
+    for d in dirs:
+        print(f" - {d}")
+    return dirs
+
+def show_folder_selection_gui(pdf_file, directories):
+    """Show GUI for manual folder selection"""
+    selected_folder = None
+    
+    root = tk.Tk()
+    root.title(f"Select Folder for {os.path.basename(pdf_file)}")
+    root.geometry("400x500")
+    
+    # File info
+    tk.Label(root, text=f"File: {os.path.basename(pdf_file)}", 
+             font=("Arial", 12, "bold")).pack(pady=10)
+    tk.Label(root, text="Please select the correct folder:", 
+             font=("Arial", 10)).pack(pady=5)
+    
+    # Create listbox with folders
+    listbox = tk.Listbox(root, height=15, font=("Arial", 10))
+    listbox.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
+    
+    # Add directories to listbox (excluding unknown)
+    folder_list = []
+    for d in directories:
+        if os.path.basename(d).lower() != 'unknown':
+            folder_name = os.path.basename(d)
+            folder_list.append(d)
+            listbox.insert(tk.END, folder_name)
+    
+    def on_select():
+        nonlocal selected_folder
+        selection = listbox.curselection()
+        if selection:
+            selected_folder = folder_list[selection[0]]
+            root.destroy()
+    
+    def on_unknown():
+        nonlocal selected_folder
+        selected_folder = "unknown"
+        root.destroy()
+    
+    # Buttons
+    button_frame = tk.Frame(root)
+    button_frame.pack(pady=10)
+    
+    tk.Button(button_frame, text="Select Folder", command=on_select, 
+              bg="green", fg="white", width=12, font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Send to Unknown", command=on_unknown, 
+              bg="red", fg="white", width=15, font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+    
+    # Center the window
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() // 2) - (root.winfo_width() // 2)
+    y = (root.winfo_screenheight() // 2) - (root.winfo_height() // 2)
+    root.geometry(f"+{x}+{y}")
+    
+    # Make window stay on top
+    root.attributes('-topmost', True)
+    root.focus_force()
+    
+    root.mainloop()
+    return selected_folder
+
+def load_index_from_files(index_dir, directories):
+    """Load index from saved JSON files in index directory"""
+    index = {}
+    for d in directories:
+        if os.path.basename(d).lower() == 'unknown':
+            continue
+        dir_name = os.path.basename(d)
+        index_file = os.path.join(index_dir, f'{dir_name}_index.json')
+        if os.path.exists(index_file):
+            try:
+                with open(index_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    index[d] = data
+            except Exception as e:
+                print(f"[ERROR] Failed to load index file {index_file}: {e}")
+                index[d] = []
+        else:
+            index[d] = []
+    return index
+
+def monitor():
+    config = load_config()
+    watch_dir = config['watch_directory']
+    parent_dir = config.get('parent_directory')
+    if not parent_dir:
+        if 'directories' in config and config['directories']:
+            parent_dir = os.path.dirname(config['directories'][0])
+        else:
+            print("No parent directory or directories specified in config.")
+            return
+    directories = get_directories_and_index(parent_dir)
+    log_file = config.get('log_file', 'buildlog.md')
+    index_dir = os.path.join(os.path.dirname(__file__), 'index')
+    os.makedirs(index_dir, exist_ok=True)
+    processed = set()
+    log("Starting AutoSort monitor", log_file)
+    while True:
+        pdfs = glob.glob(os.path.join(watch_dir, '*.pdf'))
+        unprocessed_pdfs = [pdf for pdf in pdfs if pdf not in processed]
+        total = len(unprocessed_pdfs)
+        for idx, pdf in enumerate(unprocessed_pdfs, 1):
+            try:
+                print_step("Extracting text", os.path.basename(pdf))
+                print_progress(idx, total, os.path.basename(pdf))
+                print_step("Comparing to directories", os.path.basename(pdf))
+                target_dir = compare_pdfs(pdf, directories, parent_dir, index_dir)
+                print_step("Moving file", os.path.basename(pdf), target_dir)
+                rename_and_move(pdf, target_dir, log_file, index_dir)
+                print_step("Done", os.path.basename(pdf), target_dir)
+                processed.add(pdf)
+            except Exception as e:
+                log(f"Error processing {pdf}: {e}", log_file)
+        if total:
+            print()  # Newline after progress bar
+        time.sleep(5)
+
+if __name__ == '__main__':
+    monitor()
