@@ -1,11 +1,11 @@
 @echo off
-title AutoSort - PDF Document Sorter
-echo Starting AutoSort...
+title AutoSort Debug Mode
+echo Starting AutoSort in Debug Mode...
 echo.
-echo AutoSort is now monitoring for PDF files.
+echo This will show detailed processing information.
 echo To stop, close this window or press Ctrl+C
 echo.
-python autosort.py
+python autosortdebug.py
 if %errorlevel% neq 0 (
     echo.
     echo AutoSort encountered an error.

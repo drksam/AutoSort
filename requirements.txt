@@ -1,2 +1,5 @@
-pyyaml
-PyPDF2
+# AutoSort Dependencies
+pyyaml>=6.0
+PyPDF2>=3.0.0
+# GUI support (built into Python 3.8+)
+# tkinter is included with Python standard library
