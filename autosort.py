@@ -289,15 +289,29 @@ def monitor():
             return
     directories = get_directories_and_index(parent_dir)
     log_file = config.get('log_file', 'buildlog.md')
-    index_dir = os.path.join(os.path.dirname(__file__), 'index')
+    index_dir = os.path.join(parent_dir, 'index')
     os.makedirs(index_dir, exist_ok=True)
-    processed = set()
+    processed_files = set()  # Track by file metadata, not just path
     log("Starting AutoSort monitor", log_file)
     while True:
         pdfs = glob.glob(os.path.join(watch_dir, '*.pdf'))
-        unprocessed_pdfs = [pdf for pdf in pdfs if pdf not in processed]
-        total = len(unprocessed_pdfs)
-        for idx, pdf in enumerate(unprocessed_pdfs, 1):
+        new_files = []
+        for pdf in pdfs:
+            try:
+                # Create unique identifier using path + modification time + size
+                file_stat = os.path.getmtime(pdf)
+                file_size = os.path.getsize(pdf)
+                file_id = f"{pdf}_{file_stat}_{file_size}"
+                
+                if file_id not in processed_files:
+                    new_files.append(pdf)
+                    processed_files.add(file_id)
+            except OSError:
+                # File might have been deleted/moved, skip it
+                continue
+        
+        total = len(new_files)
+        for idx, pdf in enumerate(new_files, 1):
             try:
                 print_step("Extracting text", os.path.basename(pdf))
                 print_progress(idx, total, os.path.basename(pdf))
@@ -306,7 +320,6 @@ def monitor():
                 print_step("Moving file", os.path.basename(pdf), target_dir)
                 rename_and_move(pdf, target_dir, log_file, index_dir)
                 print_step("Done", os.path.basename(pdf), target_dir)
-                processed.add(pdf)
             except Exception as e:
                 log(f"Error processing {pdf}: {e}", log_file)
         if total:
